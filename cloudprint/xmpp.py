@@ -71,13 +71,12 @@ class XmppConnection(object):
         self._connected = False
         self._wrappedsock = None
         self._keepalive_period = keepalive_period
-        self._nextkeepalive = time.time() + self._keepalive_period
+        self._nextkeepalive = 0
 
     def _read_socket(self):
         """read pending data from the socket, and send it to the XML parser.
         return False if the socket is closed, True if it is ok"""
         try:
-            self._nextkeepalive = time.time() + self._keepalive_period
             data = self._wrappedsock.recv(1024)
             if data is None or len(data) == 0:
                 # socket closed
@@ -86,6 +85,7 @@ class XmppConnection(object):
             self._connected = False
             raise
 
+        self._nextkeepalive = (time.time() + self._keepalive_period) if self._keepalive_period > 0 else 0
         LOGGER.debug('<<< %s' % data)
         self._xmlparser.feed(data)
 
@@ -93,11 +93,12 @@ class XmppConnection(object):
         """write a message to the XMPP server"""
         LOGGER.debug('>>> %s' % msg)
         try:
-            self._nextkeepalive = time.time() + self._keepalive_period
             self._wrappedsock.sendall(msg)
         except:
             self._connected = False
             raise
+
+        self._nextkeepalive = (time.time() + self._keepalive_period) if self._keepalive_period > 0 else 0
 
     def _msg(self, msg=None):
         """send a message to the XMPP server, and wait for a response
@@ -176,10 +177,7 @@ class XmppConnection(object):
     def await_notification(self, timeout):
         """wait for a timeout or event notification"""
         now = time.time()
-
-        timeoutend = None
-        if timeout is not None:
-            timeoutend = now + timeout
+        timeoutend = now + timeout if timeout is not None else None
 
         while True:
             try:
@@ -190,30 +188,28 @@ class XmppConnection(object):
                     # timeout
                     return False
 
-                waittime = self._nextkeepalive - now
-                LOGGER.debug("%f seconds until next keepalive" % waittime)
+                waittime = 0
+
+                if self._nextkeepalive:
+                    waittime = self._nextkeepalive - now
+                    LOGGER.debug("%f seconds until next keepalive" % waittime)
 
                 if timeoutend is not None:
                     remaining = timeoutend - now
-                    if remaining < waittime:
+                    if remaining > 0 and (remaining < waittime or not waittime):
                         waittime = remaining
                         LOGGER.debug("%f seconds until timeout" % waittime)
 
-                if waittime < 0:
-                    waittime = 0
-
-                sock = self._xmppsock
-                (r, w, e) = select.select([sock], [], [sock], waittime)
-
+                (r, w, e) = select.select([self._xmppsock], [], [self._xmppsock], waittime)
                 now = time.time()
 
-                if self._nextkeepalive - now <= 0:
+                if self._nextkeepalive and self._nextkeepalive - now <= 0:
                     self._send_keepalive()
 
-                if sock in r:
+                if self._xmppsock in r:
                     self._read_socket()
 
-                if sock in e:
+                if self._xmppsock in e:
                     LOGGER.warn("Error in xmpp connection")
                     raise Exception("xmpp connection errror")
 
