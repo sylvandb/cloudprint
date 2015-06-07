@@ -26,7 +26,6 @@ import logging.handlers
 import os
 import re
 import requests
-import shutil
 import stat
 import sys
 import tempfile
@@ -64,6 +63,8 @@ CLIENT_KEY = 'T0azsx2lqDztSRyPHQaERJJH'
 
 
 class CloudPrintAuth(object):
+    _header = {'X-CloudPrint-Proxy': 'ArmoooIsAnOEM'}
+
     def __init__(self, auth_path):
         self.auth_path = auth_path
         self.guid = None
@@ -78,7 +79,7 @@ class CloudPrintAuth(object):
         s = requests.session()
         s.params['access_token'] = self.access_token
         s.headers['Authorization'] = 'Authorization {0}'.format(s.params['access_token'])
-        s.headers['X-CloudPrint-Proxy'] = 'ArmoooIsAnOEM'
+        s.headers.update(self._header)
         return s
 
     @property
@@ -104,7 +105,7 @@ class CloudPrintAuth(object):
                 'description': description,
                 'capsHash': hashlib.sha1(ppd.encode('utf-8')).hexdigest(),
             },
-            headers={'X-CloudPrint-Proxy': 'ArmoooIsAnOEM'},
+            headers = self._header,
         ).json()
         print 'Goto {0} to clame this printer'.format(reg_data['complete_invite_url'])
 
@@ -114,7 +115,7 @@ class CloudPrintAuth(object):
             print 'trying for the win'
             poll = requests.get(
                 reg_data['polling_url'] + CLIENT_ID,
-                headers={'X-CloudPrint-Proxy': 'ArmoooIsAnOEM'},
+                headers = self._header,
             ).json()
             if poll['success']:
                 break
@@ -135,11 +136,10 @@ class CloudPrintAuth(object):
                 'code': poll['authorization_code'],
             }
         ).json()
-
         self.refresh_token = token['refresh_token']
-        self.refresh()
 
         self.save()
+        self.refresh()
 
     def refresh(self):
         token = requests.post(
@@ -158,9 +158,12 @@ class CloudPrintAuth(object):
         self.exp_time = datetime.datetime.now() + (expires_in - slop_time)
 
     def load(self):
-        if os.path.exists(self.auth_path):
+        try:
             with open(self.auth_path) as auth_file:
                 auth_data = json.load(auth_file)
+        except OSError:
+            pass
+        else:
             self.guid = auth_data['guid']
             self.xmpp_jid = auth_data['xmpp_jid']
             self.email = auth_data['email']
@@ -169,14 +172,14 @@ class CloudPrintAuth(object):
         self.refresh()
 
     def delete(self):
-        if os.path.exists(self.auth_path):
+        try:
             os.unlink(self.auth_path)
+        except OSError:
+            pass
 
     def save(self):
-            if not os.path.exists(self.auth_path):
-                with open(self.auth_path, 'w') as auth_file:
-                    os.chmod(self.auth_path, stat.S_IRUSR | stat.S_IWUSR)
             with open(self.auth_path, 'w') as auth_file:
+                os.chmod(self.auth_path, stat.S_IRUSR | stat.S_IWUSR)
                 json.dump({
                     'guid':  self.guid,
                     'email': self.email,
@@ -275,10 +278,7 @@ class CloudPrintProxy(object):
            },
         ).json()
 
-        if not 'jobs' in docs:
-            return []
-        else:
-            return docs['jobs']
+        return docs.get('jobs', [])
 
     def finish_job(self, job_id):
         self.auth.session.post(
@@ -350,13 +350,13 @@ def match_re(prn, regexps, empty=False):
 
 
 def get_printer_info(cups_connection, printer_name):
-        with open(cups_connection.getPPD(printer_name)) as ppd_file:
-            ppd = ppd_file.read()
-        #This is bad it should use the LanguageEncoding in the PPD
-        #But a lot of utf-8 PPDs seem to say they are ISOLatin1
-        ppd = ppd.decode('utf-8')
-        description = cups_connection.getPrinterAttributes(printer_name)['printer-info']
-        return ppd, description
+    with open(cups_connection.getPPD(printer_name)) as ppd_file:
+        ppd = ppd_file.read()
+    #This is bad it should use the LanguageEncoding in the PPD
+    #But a lot of utf-8 PPDs seem to say they are ISOLatin1
+    ppd = ppd.decode('utf-8')
+    description = cups_connection.getPrinterAttributes(printer_name)['printer-info']
+    return ppd, description
 
 
 def sync_printers(cups_connection, cpp):
@@ -388,26 +388,30 @@ def sync_printers(cups_connection, cpp):
 
 def process_job(cups_connection, cpp, printer, job):
     try:
-        pdf = cpp.auth.session.get(job['fileUrl'], stream=True)
-        tmp = tempfile.NamedTemporaryFile(delete=False)
-        shutil.copyfileobj(pdf.raw, tmp)
-        tmp.flush()
 
         options = cpp.auth.session.get(job['ticketUrl']).json()
-        if 'request' in options:
+        try:
             del options['request']
-
+        except KeyError:
+            pass
         options = dict((str(k), str(v)) for k, v in options.items())
 
-        cpp.finish_job(job['id'])
+        pdf = cpp.auth.session.get(job['fileUrl'])
 
-        cups_connection.printFile(printer.name, tmp.name, job['title'], options)
-        os.unlink(tmp.name)
-        LOGGER.info('SUCCESS ' + job['title'].encode('unicode-escape'))
+        with tempfile.NamedTemporaryFile() as tmp:
+
+            for chunk in pdf.iter_content(65536):
+                tmp.write(chunk)
+
+            tmp.flush()
+            cups_connection.printFile(printer.name, tmp.name, job['title'], options)
 
     except Exception:
         cpp.fail_job(job['id'])
         LOGGER.exception('ERROR ' + job['title'].encode('unicode-escape'))
+    else:
+        cpp.finish_job(job['id'])
+        LOGGER.info('SUCCESS ' + job['title'].encode('unicode-escape'))
 
 
 def process_jobs(cups_connection, cpp):
