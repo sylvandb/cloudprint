@@ -76,9 +76,9 @@ class CloudPrintAuth(object):
     @property
     def session(self):
         s = requests.session()
-        s.params['access_token'] = self._access_token
+        s.params['access_token'] = self.access_token
+        s.headers['Authorization'] = 'Authorization {0}'.format(s.params['access_token'])
         s.headers['X-CloudPrint-Proxy'] = 'ArmoooIsAnOEM'
-        s.headers['Authorization'] = 'Authorization {0}'.format(self._access_token)
         return s
 
     @property
@@ -197,14 +197,28 @@ class CloudPrintProxy(object):
         self.exclude = []
 
     def get_printers(self):
-        printers = self.auth.session.post(
+        r = self.auth.session.post(
             PRINT_CLOUD_URL + 'list',
             {
                 'output': 'json',
                 'proxy': self.auth.guid,
             },
-        ).json()
-        return [PrinterProxy(self, p['id'], p['name']) for p in printers['printers']]
+        )
+        try:
+            printers = r.json()
+        except ValueError:
+            pinfo = []
+            LOGGER.error("get_printers %s, bad json: %s, %s",
+                time.strftime('%Y%m%d-%H%M%S'), r, r.content)
+        else:
+            pinfo = printers.get('printers', [])
+            if self.verbose:
+                LOGGER.debug("get_printers: good json: %s, %s", r, r.content)
+                LOGGER.info("get_printers, %d@%s: %s",
+                    len(pinfo),
+                    time.strftime('%Y%m%d-%H%M%S'),
+                    ', '.join(p['name'] for p in pinfo))
+        return [PrinterProxy(self, p['id'], p['name']) for p in pinfo]
 
     def delete_printer(self, printer_id):
         self.auth.session.post(
