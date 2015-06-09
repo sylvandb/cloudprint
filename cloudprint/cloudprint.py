@@ -34,6 +34,7 @@ import uuid
 
 import xmpp
 
+
 XMPP_SERVER_HOST = 'talk.google.com'
 XMPP_SERVER_PORT = 5223
 
@@ -404,7 +405,7 @@ def process_job(cups_connection, cpp, printer, job):
                 tmp.write(chunk)
 
             tmp.flush()
-            cups_connection.printFile(printer.name, tmp.name, job['title'], options)
+            cups_connection.printFile(printer.name, tmp.name, job['title'][:255], options)
 
     except Exception:
         cpp.fail_job(job['id'])
@@ -418,15 +419,15 @@ def process_jobs(cups_connection, cpp):
     xmpp_conn = xmpp.XmppConnection(keepalive_period=KEEPALIVE)
 
     while True:
-        printers = cpp.get_printers()
+
+        for printer in cpp.get_printers():
+            for job in printer.get_jobs():
+                process_job(cups_connection, cpp, printer, job)
+
         try:
-            for printer in printers:
-                for job in printer.get_jobs():
-                    process_job(cups_connection, cpp, printer, job)
 
             if not xmpp_conn.is_connected():
                 xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, cpp.auth)
-
             xmpp_conn.await_notification(cpp.sleeptime)
 
         except Exception:
@@ -435,7 +436,9 @@ def process_jobs(cups_connection, cpp):
             time.sleep(FAIL_RETRY)
 
 
+
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', dest='daemon', action='store_true',
                         help='enable daemon mode (requires the daemon module)')
@@ -522,5 +525,9 @@ def main():
     else:
         process_jobs(cups_connection, cpp)
 
+
+
+
 if __name__ == '__main__':
+
     main()
