@@ -1,5 +1,10 @@
-Share your CUPS printers with google's cloud print.
-Works with linux and OS X.
+Share your CUPS printers with Google's cloud print.
+Works with Linux and OS X.
+
+This software is a Python implementation of a cloud print connector.
+Unlike Google's Linux connector, it does not require chrome to be
+installed on the server.
+
 
 Requires
 ---------------------------------------------------
@@ -68,3 +73,6 @@ Install
 ::
 
   pip install cloudprint
+
+After running cloudprint, verify that the connector successfully installed the
+cloud printer by visiting: http://www.google.com/cloudprint/manage.html
