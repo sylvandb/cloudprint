@@ -56,6 +56,9 @@ FAIL_RETRY = 60
 # how often, in seconds, to send a keepalive character over xmpp
 KEEPALIVE = 600.0
 
+# failed job retries
+RETRIES = 1
+
 LOGGER = logging.getLogger('cloudprint')
 LOGGER.setLevel(logging.INFO)
 
@@ -387,7 +390,11 @@ def sync_printers(cups_connection, cpp):
         remote_printers[printer_name].delete()
 
 
+job_retries = 0
+
 def process_job(cups_connection, cpp, printer, job):
+    global job_retries
+
     try:
 
         options = cpp.auth.session.get(job['ticketUrl']).json()
@@ -408,11 +415,18 @@ def process_job(cups_connection, cpp, printer, job):
             cups_connection.printFile(printer.name, tmp.name, job['title'][:255], options)
 
     except Exception:
-        cpp.fail_job(job['id'])
-        LOGGER.exception('ERROR ' + job['title'].encode('unicode-escape'))
+        job_retries += 1
+        if job_retries > RETRIES:
+            cpp.fail_job(job['id'])
+            LOGGER.exception('ERROR failed after %d tries: %s', job_retries, job['title'].encode('unicode-escape'))
+            job_retries = 0
+        else:
+            LOGGER.info('Job %s failed attempt %d.', job['title'].encode('unicode-escape'), job_retries)
+            raise
+
     else:
         cpp.finish_job(job['id'])
-        LOGGER.info('SUCCESS ' + job['title'].encode('unicode-escape'))
+        LOGGER.info('SUCCESS %s', job['title'].encode('unicode-escape'))
 
 
 def process_jobs(cups_connection, cpp):
@@ -422,8 +436,14 @@ def process_jobs(cups_connection, cpp):
 
         for printer in cpp.get_printers():
             for job in printer.get_jobs():
-                process_job(cups_connection, cpp, printer, job)
-
+                while True:
+                    try:
+                        process_job(cups_connection, cpp, printer, job)
+                    except Exception:
+                        LOGGER.exception('ERROR: Could not print. Will Try again in %d Seconds' % FAIL_RETRY)
+                        time.sleep(FAIL_RETRY)
+                    else:
+                        break
         try:
 
             if not xmpp_conn.is_connected():
@@ -431,7 +451,6 @@ def process_jobs(cups_connection, cpp):
             xmpp_conn.await_notification(cpp.sleeptime)
 
         except Exception:
-            global FAIL_RETRY
             LOGGER.exception('ERROR: Could not Connect to Cloud Service. Will Try again in %d Seconds' % FAIL_RETRY)
             time.sleep(FAIL_RETRY)
 
