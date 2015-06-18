@@ -5,11 +5,9 @@ except ImportError:
     use_setuptools()
     from setuptools import setup, find_packages
 
-import os.path
-
 setup(
     name='cloudprint',
-    version='0.11',
+    version='0.12',
     description='Google cloud print proxy for linux/OSX',
     long_description=open('README.rst').read(),
     author='Jason Michalski',
@@ -30,4 +28,7 @@ setup(
             'cloudprint = cloudprint.cloudprint:main',
         ],
     },
+    install_requires = [
+        'requests==2.7.0',
+    ],
 )
