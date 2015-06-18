@@ -448,6 +448,7 @@ def process_jobs(cups_connection, cpp):
 
             if not xmpp_conn.is_connected():
                 xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, cpp.auth)
+            LOGGER.info('Waiting %ds for XMPP notification...', cpp.sleeptime)
             xmpp_conn.await_notification(cpp.sleeptime)
 
         except Exception:
