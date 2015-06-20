@@ -59,11 +59,11 @@ KEEPALIVE = 600.0
 # failed job retries
 RETRIES = 1
 
-LOGGER = logging.getLogger('cloudprint')
-LOGGER.setLevel(logging.INFO)
-
 CLIENT_ID = '607830223128-rqenc3ekjln2qi4m4ntudskhnsqn82gn.apps.googleusercontent.com'
 CLIENT_KEY = 'T0azsx2lqDztSRyPHQaERJJH'
+
+LOGGER = None
+
 
 
 class CloudPrintAuth(object):
@@ -236,7 +236,7 @@ class CloudPrintProxy(object):
            },
         ).raise_for_status()
         if self.verbose:
-            LOGGER.info('Deleted printer ' + printer_id)
+            LOGGER.info('Deleted printer: %s', printer_id)
 
     def add_printer(self, name, description, ppd):
         self.auth.session.post(
@@ -253,7 +253,7 @@ class CloudPrintProxy(object):
            },
         ).raise_for_status()
         if self.verbose:
-            LOGGER.info('Added Printer ' + name)
+            LOGGER.info('Added Printer: %s', name)
 
     def update_printer(self, printer_id, name, description, ppd):
         self.auth.session.post(
@@ -271,7 +271,7 @@ class CloudPrintProxy(object):
            },
         ).raise_for_status()
         if self.verbose:
-            LOGGER.info('Updated Printer ' + name)
+            LOGGER.info('Updated Printer: %s', name)
 
     def get_jobs(self, printer_id):
         docs = self.auth.session.post(
@@ -294,7 +294,7 @@ class CloudPrintProxy(object):
            },
         ).json()
         if self.verbose:
-            LOGGER.info('Finished Job' + job_id)
+            LOGGER.info('Finished Job: %s', job_id)
 
     def fail_job(self, job_id):
         self.auth.session.post(
@@ -306,7 +306,7 @@ class CloudPrintProxy(object):
            },
         ).json()
         if self.verbose:
-            LOGGER.info('Failed Job' + job_id)
+            LOGGER.info('Failed Job: %s', job_id)
 
 
 class PrinterProxy(object):
@@ -316,7 +316,7 @@ class PrinterProxy(object):
         self.name = name
 
     def get_jobs(self):
-        LOGGER.info('Polling for jobs on ' + self.name)
+        LOGGER.info('Polling for jobs on %s', self.name)
         return self.cpp.get_jobs(self.id)
 
     def update(self, description, ppd):
@@ -378,7 +378,7 @@ def sync_printers(cups_connection, cpp):
             ppd, description = get_printer_info(cups_connection, printer_name)
             cpp.add_printer(printer_name, description, ppd)
         except (cups.IPPError, UnicodeDecodeError):
-            LOGGER.info('Skipping ' + printer_name)
+            LOGGER.info('Skipping: %s', printer_name)
 
     #Existing printers
     for printer_name in local_printer_names & remote_printer_names:
@@ -452,19 +452,24 @@ def process_jobs(cups_connection, cpp):
             xmpp_conn.await_notification(cpp.sleeptime)
 
         except Exception:
-            LOGGER.exception('ERROR: Could not Connect to Cloud Service. Will Try again in %d Seconds' % FAIL_RETRY)
+            LOGGER.exception('ERROR: Could not Connect to XMPP Cloud Service. Will Try again in %d Seconds' % FAIL_RETRY)
             time.sleep(FAIL_RETRY)
 
 
 
 def main():
 
+    global LOGGER
+    if LOGGER is None:
+        LOGGER = logging.getLogger(PRINT_CLOUD_SERVICE_ID)
+        LOGGER.setLevel(logging.INFO)
+
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', dest='daemon', action='store_true',
                         help='enable daemon mode (requires the daemon module)')
     parser.add_argument('-l', dest='logout', action='store_true',
                         help='logout of the google account')
-    parser.add_argument('-p', metavar='pid_file', dest='pidfile', default='cloudprint.pid',
+    parser.add_argument('-p', metavar='pid_file', dest='pidfile', default='/run/cloudprint.pid',
                         help='path to write the pid to (default %(default)s)')
     parser.add_argument('-a', metavar='account_file', dest='authfile', default=os.path.expanduser('~/.cloudprintauth.json'),
                         help='path to google account ident data (default %(default)s)')
@@ -499,7 +504,7 @@ def main():
         return
 
     cups_connection = cups.Connection()
-    cpp = CloudPrintProxy(auth)
+    cpp = CloudPrintProxy(auth, verbose=bool(args.verbose))
 
     cpp.sleeptime = POLL_PERIOD
     if args.fastpoll:
