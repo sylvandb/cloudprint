@@ -202,8 +202,14 @@ class CloudPrintProxy(object):
         self.sleeptime = 0
         self.include = []
         self.exclude = []
+        self._pinfo_time = 0
+        self._pinfo = []
 
-    def get_printers(self):
+    def _get_pinfo(self):
+        if self._pinfo and self._pinfo_time and (int(time.time()) - self._pinfo_time) < 300:
+            return
+        self._pinfo = []
+        self._pinfo_time = int(time.time())
         r = self.auth.session.post(
             PRINT_CLOUD_URL + 'list',
             {
@@ -216,16 +222,21 @@ class CloudPrintProxy(object):
         except ValueError:
             pinfo = []
             LOGGER.error("get_printers %s, bad json: %s, %s",
-                time.strftime('%Y%m%d-%H%M%S'), r, r.content)
+                time.strftime('%Y%m%d-%H%M%S', time.localtime(self._pinfo_time)), r, r.content)
         else:
             pinfo = printers.get('printers', [])
             if self.verbose:
                 LOGGER.debug("get_printers: good json: %s, %s", r, r.content)
-                LOGGER.info("get_printers, %d@%s: %s",
-                    len(pinfo),
-                    time.strftime('%Y%m%d-%H%M%S'),
-                    ', '.join(p['name'] for p in pinfo))
-        return [PrinterProxy(self, p['id'], p['name']) for p in pinfo]
+            LOGGER.info("get_printers @%s: %d%s",
+                time.strftime('%Y%m%d-%H%M%S', time.localtime(self._pinfo_time)),
+                len(pinfo),
+                ' - ' + ', '.join(p['name'] for p in pinfo) if self.verbose else ''
+            )
+        self._pinfo = pinfo
+
+    def get_printers(self):
+        self._get_pinfo()
+        return [PrinterProxy(self, p['id'], p['name']) for p in self._pinfo]
 
     def delete_printer(self, printer_id):
         self.auth.session.post(
@@ -448,7 +459,7 @@ def process_jobs(cups_connection, cpp):
 
             if not xmpp_conn.is_connected():
                 xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, cpp.auth)
-            LOGGER.info('Waiting %ds for XMPP notification...', cpp.sleeptime)
+            LOGGER.debug('Waiting %ds for XMPP notification...', cpp.sleeptime)
             xmpp_conn.await_notification(cpp.sleeptime)
 
         except Exception:

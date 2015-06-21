@@ -153,7 +153,7 @@ class XmppConnection(object):
             self.close()
             raise
 
-        LOGGER.info("xmpp connection established")
+        LOGGER.debug("xmpp connection established")
         self._connected = True
 
     def close(self):
