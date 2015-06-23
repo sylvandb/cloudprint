@@ -47,14 +47,19 @@ PRINT_CLOUD_URL = 'https://www.google.com/cloudprint/'
 # when xmpp is connecting properly.
 # 'None' to poll only on startup and when we get XMPP notifications.
 # 'Fast Poll' is used as a workaround when notifications are not working.
-POLL_PERIOD = 3600.0
-FAST_POLL_PERIOD = 30.0
+POLL_PERIOD = 3600
+FAST_POLL_PERIOD = 30
+
+# XMPP_POLL to interrupt XMPP wait by POLL_PERIOD
+# but only poll for jobs every XMPP_POLL_PERIOD times
+# used to revalidate XMPP connection more often than polling for jobs
+XMPP_POLL_PERIOD = 6
 
 # wait period to retry when xmpp fails
 FAIL_RETRY = 60
 
 # how often, in seconds, to send a keepalive character over xmpp
-KEEPALIVE = 600.0
+KEEPALIVE = 600
 
 # failed job retries
 RETRIES = 1
@@ -113,8 +118,8 @@ class CloudPrintAuth(object):
         ).json()
         print 'Goto {0} to clame this printer'.format(reg_data['complete_invite_url'])
 
-        end = time.time() + int(reg_data['token_duration'])
-        while time.time() < end:
+        end = int(time.time()) + int(reg_data['token_duration'])
+        while int(time.time()) < end:
             time.sleep(10)
             print 'trying for the win'
             poll = requests.get(
@@ -192,6 +197,7 @@ class CloudPrintAuth(object):
                     },
                     auth_file
                 )
+
 
 
 class CloudPrintProxy(object):
@@ -320,24 +326,27 @@ class CloudPrintProxy(object):
             LOGGER.info('Failed Job: %s', job_id)
 
 
+
 class PrinterProxy(object):
+
     def __init__(self, cpp, printer_id, name):
         self.cpp = cpp
-        self.id = printer_id
+        self.printer_id = printer_id
         self.name = name
 
     def get_jobs(self):
         LOGGER.info('Polling for jobs on %s', self.name)
-        return self.cpp.get_jobs(self.id)
+        return self.cpp.get_jobs(self.printer_id)
 
     def update(self, description, ppd):
-        return self.cpp.update_printer(self.id, self.name, description, ppd)
+        return self.cpp.update_printer(self.printer_id, self.name, description, ppd)
 
     def delete(self):
-        return self.cpp.delete_printer(self.id)
+        return self.cpp.delete_printer(self.printer_id)
 
 
-class App(object):
+
+class ProxyApp(object):
     def __init__(self, cups_connection=None, cpp=None, printers=None, pidfile_path=None):
         self.cups_connection = cups_connection
         self.cpp = cpp
@@ -350,6 +359,7 @@ class App(object):
 
     def run(self):
         process_jobs(self.cups_connection, self.cpp)
+
 
 
 #True if printer name matches *any* of the regular expressions in regexps
@@ -444,8 +454,8 @@ def process_jobs(cups_connection, cpp):
     xmpp_conn = xmpp.XmppConnection(keepalive_period=KEEPALIVE)
 
     while True:
-
         for printer in cpp.get_printers():
+
             for job in printer.get_jobs():
                 while True:
                     try:
@@ -455,16 +465,18 @@ def process_jobs(cups_connection, cpp):
                         time.sleep(FAIL_RETRY)
                     else:
                         break
-        try:
 
-            if not xmpp_conn.is_connected():
-                xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, cpp.auth)
-            LOGGER.debug('Waiting %ds for XMPP notification...', cpp.sleeptime)
-            xmpp_conn.await_notification(cpp.sleeptime)
-
-        except Exception:
-            LOGGER.exception('ERROR: Could not Connect to XMPP Cloud Service. Will Try again in %d Seconds' % FAIL_RETRY)
-            time.sleep(FAIL_RETRY)
+        xmpp_poll = XMPP_POLL_PERIOD or 1
+        while xmpp_poll > 0:
+            xmpp_poll -= 1
+            try:
+                if not xmpp_conn.is_connected():
+                    xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, cpp.auth)
+                LOGGER.debug('Waiting %ds for XMPP notification...', cpp.sleeptime)
+                xmpp_conn.await_notification(cpp.sleeptime)
+            except Exception:
+                LOGGER.exception('ERROR: Could not Connect to XMPP Cloud Service. Will Try again in %d Seconds' % FAIL_RETRY)
+                time.sleep(FAIL_RETRY)
 
 
 
@@ -515,12 +527,9 @@ def main():
         return
 
     cups_connection = cups.Connection()
+
     cpp = CloudPrintProxy(auth, verbose=bool(args.verbose))
-
-    cpp.sleeptime = POLL_PERIOD
-    if args.fastpoll:
-        cpp.sleeptime = FAST_POLL_PERIOD
-
+    cpp.sleeptime = FAST_POLL_PERIOD if args.fastpoll else POLL_PERIOD
     cpp.include = args.include
     cpp.exclude = args.exclude
 
@@ -550,7 +559,7 @@ def main():
             sys.exit(1)
 
         # XXX printers is the google list
-        app = App(
+        app = ProxyApp(
             cups_connection=cups_connection,
             cpp=cpp,
             pidfile_path=os.path.abspath(args.pidfile)
