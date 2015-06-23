@@ -35,6 +35,10 @@ import uuid
 import xmpp
 
 
+
+VERBOSE = True
+
+
 XMPP_SERVER_HOST = 'talk.google.com'
 XMPP_SERVER_PORT = 5223
 
@@ -347,10 +351,11 @@ class PrinterProxy(object):
 
 
 class ProxyApp(object):
-    def __init__(self, cups_connection=None, cpp=None, printers=None, pidfile_path=None):
+
+    def __init__(self, cups_connection, cpp, pidfile_path):
         self.cups_connection = cups_connection
         self.cpp = cpp
-        self.printers = printers
+        # these are needed by DaemonRunner
         self.pidfile_path = pidfile_path
         self.stdin_path = '/dev/null'
         self.stdout_path = '/dev/null'
@@ -358,7 +363,71 @@ class ProxyApp(object):
         self.pidfile_timeout = 5
 
     def run(self):
-        process_jobs(self.cups_connection, self.cpp)
+        self.process_jobs()
+
+
+    def process_job(self, printer, job):
+
+        self._job_retries = 0
+        while True:
+            try:
+
+                options = self.cpp.auth.session.get(job['ticketUrl']).json()
+                try:
+                    del options['request']
+                except KeyError:
+                    pass
+                options = dict((str(k), str(v)) for k, v in options.items())
+
+                pdf = self.cpp.auth.session.get(job['fileUrl'])
+
+                with tempfile.NamedTemporaryFile() as tmp:
+
+                    for chunk in pdf.iter_content(65536):
+                        tmp.write(chunk)
+
+                    tmp.flush()
+                    self.cups_connection.printFile(printer.name, tmp.name, job['title'][:255], options)
+
+            except Exception:
+                self._job_retries += 1
+                if self._job_retries > RETRIES:
+                    self.cpp.fail_job(job['id'])
+                    LOGGER.exception(
+                        'ERROR failed after %d tries: %s', self._job_retries, job['title'].encode('unicode-escape'))
+                    break
+                LOGGER.exception('Job %s failed attempt %d, Will try again in %d seconds.',
+                    job['title'].encode('unicode-escape'), self._job_retries, FAIL_RETRY)
+                time.sleep(FAIL_RETRY)
+
+            else:
+                self.cpp.finish_job(job['id'])
+                LOGGER.info('SUCCESS %s', job['title'].encode('unicode-escape'))
+                break
+
+
+    def process_jobs(self):
+
+        xmpp_conn = xmpp.XmppConnection(keepalive_period=KEEPALIVE)
+
+        while True:
+            for printer in self.cpp.get_printers():
+                for job in printer.get_jobs():
+                    process_job(printer, job)
+
+            xmpp_poll = XMPP_POLL_PERIOD or 1
+            while xmpp_poll > 0:
+                xmpp_poll -= 1
+                try:
+                    if not xmpp_conn.is_connected():
+                        xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, self.cpp.auth)
+                    if VERBOSE:
+                        LOGGER.info('Waiting %ds for XMPP notification...', self.cpp.sleeptime)
+                    xmpp_conn.await_notification(self.cpp.sleeptime)
+                except Exception:
+                    LOGGER.exception(
+                        'ERROR: Could not Connect to XMPP Cloud Service. Will Try again in %d Seconds' % FAIL_RETRY)
+                    time.sleep(FAIL_RETRY)
 
 
 
@@ -401,82 +470,16 @@ def sync_printers(cups_connection, cpp):
         except (cups.IPPError, UnicodeDecodeError):
             LOGGER.info('Skipping: %s', printer_name)
 
+    #Printers that have left us
+    for printer_name in remote_printer_names - local_printer_names:
+        remote_printers[printer_name].delete()
+
     #Existing printers
     for printer_name in local_printer_names & remote_printer_names:
         ppd, description = get_printer_info(cups_connection, printer_name)
         remote_printers[printer_name].update(description, ppd)
 
-    #Printers that have left us
-    for printer_name in remote_printer_names - local_printer_names:
-        remote_printers[printer_name].delete()
 
-
-job_retries = 0
-
-def process_job(cups_connection, cpp, printer, job):
-    global job_retries
-
-    try:
-
-        options = cpp.auth.session.get(job['ticketUrl']).json()
-        try:
-            del options['request']
-        except KeyError:
-            pass
-        options = dict((str(k), str(v)) for k, v in options.items())
-
-        pdf = cpp.auth.session.get(job['fileUrl'])
-
-        with tempfile.NamedTemporaryFile() as tmp:
-
-            for chunk in pdf.iter_content(65536):
-                tmp.write(chunk)
-
-            tmp.flush()
-            cups_connection.printFile(printer.name, tmp.name, job['title'][:255], options)
-
-    except Exception:
-        job_retries += 1
-        if job_retries > RETRIES:
-            cpp.fail_job(job['id'])
-            LOGGER.exception('ERROR failed after %d tries: %s', job_retries, job['title'].encode('unicode-escape'))
-            job_retries = 0
-        else:
-            LOGGER.info('Job %s failed attempt %d.', job['title'].encode('unicode-escape'), job_retries)
-            raise
-
-    else:
-        cpp.finish_job(job['id'])
-        LOGGER.info('SUCCESS %s', job['title'].encode('unicode-escape'))
-
-
-def process_jobs(cups_connection, cpp):
-    xmpp_conn = xmpp.XmppConnection(keepalive_period=KEEPALIVE)
-
-    while True:
-        for printer in cpp.get_printers():
-
-            for job in printer.get_jobs():
-                while True:
-                    try:
-                        process_job(cups_connection, cpp, printer, job)
-                    except Exception:
-                        LOGGER.exception('ERROR: Could not print. Will Try again in %d Seconds' % FAIL_RETRY)
-                        time.sleep(FAIL_RETRY)
-                    else:
-                        break
-
-        xmpp_poll = XMPP_POLL_PERIOD or 1
-        while xmpp_poll > 0:
-            xmpp_poll -= 1
-            try:
-                if not xmpp_conn.is_connected():
-                    xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, cpp.auth)
-                LOGGER.debug('Waiting %ds for XMPP notification...', cpp.sleeptime)
-                xmpp_conn.await_notification(cpp.sleeptime)
-            except Exception:
-                LOGGER.exception('ERROR: Could not Connect to XMPP Cloud Service. Will Try again in %d Seconds' % FAIL_RETRY)
-                time.sleep(FAIL_RETRY)
 
 
 
@@ -506,6 +509,8 @@ def main():
                         help='exclude local printers matching %(metavar)s')
     parser.add_argument('-v', dest='verbose', action='store_true',
                         help='verbose logging')
+    parser.add_argument('-D', dest='debug', action='store_true',
+                        help='debug logging')
     args = parser.parse_args()
 
     # if daemon, log to syslog, otherwise log to stdout
@@ -516,7 +521,7 @@ def main():
         handler = logging.StreamHandler(sys.stdout)
     LOGGER.addHandler(handler)
 
-    if args.verbose:
+    if args.debug:
         LOGGER.info('Setting DEBUG-level logging')
         LOGGER.setLevel(logging.DEBUG)
 
@@ -527,11 +532,6 @@ def main():
         return
 
     cups_connection = cups.Connection()
-
-    cpp = CloudPrintProxy(auth, verbose=bool(args.verbose))
-    cpp.sleeptime = FAST_POLL_PERIOD if args.fastpoll else POLL_PERIOD
-    cpp.include = args.include
-    cpp.exclude = args.exclude
 
     printers = cups_connection.getPrinters().keys()
     if not printers:
@@ -545,10 +545,21 @@ def main():
     else:
         auth.load()
 
-    sync_printers(cups_connection, cpp)
-
     if args.authonly:
         sys.exit(0)
+
+    cpp = CloudPrintProxy(auth, verbose=bool(VERBOSE or args.verbose))
+    cpp.sleeptime = FAST_POLL_PERIOD if args.fastpoll else POLL_PERIOD
+    cpp.include = args.include
+    cpp.exclude = args.exclude
+
+    sync_printers(cups_connection, cpp)
+
+    app = ProxyApp(
+        cups_connection=cups_connection,
+        cpp=cpp,
+        pidfile_path=os.path.abspath(args.pidfile)
+    )
 
     if args.daemon:
         try:
@@ -558,17 +569,11 @@ def main():
             print '\tyum install python-daemon, or apt-get install python-daemon, or pip install python-daemon'
             sys.exit(1)
 
-        # XXX printers is the google list
-        app = ProxyApp(
-            cups_connection=cups_connection,
-            cpp=cpp,
-            pidfile_path=os.path.abspath(args.pidfile)
-        )
         sys.argv = [sys.argv[0], 'start']
         daemon_runner = runner.DaemonRunner(app)
         daemon_runner.do_action()
     else:
-        process_jobs(cups_connection, cpp)
+        app.run()
 
 
 
