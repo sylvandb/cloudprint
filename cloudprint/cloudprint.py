@@ -17,7 +17,6 @@
 # along with cloudprint.  If not, see <http://www.gnu.org/licenses/>.
 
 import argparse
-import cups
 import datetime
 import hashlib
 import json
@@ -210,8 +209,6 @@ class CloudPrintProxy(object):
         self.auth = auth
         self.verbose = verbose
         self.sleeptime = 0
-        self.include = []
-        self.exclude = []
         self._pinfo_time = 0
         self._pinfo = []
 
@@ -352,8 +349,8 @@ class PrinterProxy(object):
 
 class ProxyApp(object):
 
-    def __init__(self, cups_connection, cpp, pidfile_path):
-        self.cups_connection = cups_connection
+    def __init__(self, sys_printers, cpp, pidfile_path):
+        self.sys_printers = sys_printers
         self.cpp = cpp
         # these are needed by DaemonRunner
         self.pidfile_path = pidfile_path
@@ -387,7 +384,7 @@ class ProxyApp(object):
                         tmp.write(chunk)
 
                     tmp.flush()
-                    self.cups_connection.printFile(printer.name, tmp.name, job['title'][:255], options)
+                    self.sys_printers.print_file(printer.name, tmp.name, job['title'], options)
 
             except Exception:
                 self._job_retries += 1
@@ -431,9 +428,47 @@ class ProxyApp(object):
 
 
 
+class SysPrinterError(Exception):
+    pass
+
+
+import cups
+class SystemPrinters(object):
+
+    def __init__(self, include=None, exclude=None):
+        self.include = include
+        self.exclude = exclude
+        self.cups = cups.Connection()
+        self.printers = None
+
+    def get_printer_names(self):
+        if not self.printers:
+            printers = self.cups.getPrinters().keys()
+            #Include/exclude system printers
+            printers = [prn for prn in printers if match_re(prn, self.include, True)]
+            printers = [prn for prn in printers if not match_re(prn, self.exclude)]
+            self.printers = printers
+        return self.printers
+
+    def get_printer_info(self, printer_name):
+        try:
+            description = self.cups.getPrinterAttributes(printer_name)['printer-info']
+            with open(self.cups.getPPD(printer_name)) as ppd_file:
+                ppd = ppd_file.read()
+        except cups.IPPError as e:
+            raise SysPrinterError(str(e))
+        #This is bad it should use the LanguageEncoding in the PPD
+        #But a lot of utf-8 PPDs seem to say they are ISOLatin1
+        return ppd.decode('utf-8'), description
+
+    def print_file(self, printer_name, file_name, job_title, options):
+        self.cups.printFile(printer_name, file_name, job_title[:255], options)
+
+
+
 #True if printer name matches *any* of the regular expressions in regexps
 def match_re(prn, regexps, empty=False):
-    if len(regexps):
+    if regexps:
         try:
             return re.match(regexps[0], prn, re.UNICODE) or match_re(prn, regexps[1:])
         except Exception:
@@ -443,31 +478,17 @@ def match_re(prn, regexps, empty=False):
         return empty
 
 
-def get_printer_info(cups_connection, printer_name):
-    with open(cups_connection.getPPD(printer_name)) as ppd_file:
-        ppd = ppd_file.read()
-    #This is bad it should use the LanguageEncoding in the PPD
-    #But a lot of utf-8 PPDs seem to say they are ISOLatin1
-    ppd = ppd.decode('utf-8')
-    description = cups_connection.getPrinterAttributes(printer_name)['printer-info']
-    return ppd, description
-
-
-def sync_printers(cups_connection, cpp):
-    local_printer_names = set(cups_connection.getPrinters().keys())
+def sync_printers(sys_printers, cpp):
+    local_printer_names = set(sys_printers.get_printer_names())
     remote_printers = dict([(p.name, p) for p in cpp.get_printers()])
     remote_printer_names = set(remote_printers)
-
-    #Include/exclude local printers
-    local_printer_names = set([prn for prn in local_printer_names if match_re(prn, cpp.include, True)])
-    local_printer_names = set([prn for prn in local_printer_names if not match_re(prn, cpp.exclude)])
 
     #New printers
     for printer_name in local_printer_names - remote_printer_names:
         try:
-            ppd, description = get_printer_info(cups_connection, printer_name)
+            ppd, description = sys_printers.get_printer_info(printer_name)
             cpp.add_printer(printer_name, description, ppd)
-        except (cups.IPPError, UnicodeDecodeError):
+        except (SysPrinterError, UnicodeDecodeError):
             LOGGER.info('Skipping: %s', printer_name)
 
     #Printers that have left us
@@ -476,7 +497,7 @@ def sync_printers(cups_connection, cpp):
 
     #Existing printers
     for printer_name in local_printer_names & remote_printer_names:
-        ppd, description = get_printer_info(cups_connection, printer_name)
+        ppd, description = sys_printers.get_printer_info(printer_name)
         remote_printers[printer_name].update(description, ppd)
 
 
@@ -531,16 +552,16 @@ def main():
         LOGGER.info('logged out')
         return
 
-    cups_connection = cups.Connection()
+    sys_printers = SystemPrinters(include=args.include, exclude=args.exclude)
 
-    printers = cups_connection.getPrinters().keys()
+    printers = sys_printers.get_printer_names()
     if not printers:
         LOGGER.error('No printers found')
         return
 
     if auth.no_auth():
         name = printers[0]
-        ppd, description = get_printer_info(cups_connection, name)
+        ppd, description = sys_printers.get_printer_info(printer_name)
         auth.login(name, description, ppd)
     else:
         auth.load()
@@ -550,13 +571,11 @@ def main():
 
     cpp = CloudPrintProxy(auth, verbose=bool(VERBOSE or args.verbose))
     cpp.sleeptime = FAST_POLL_PERIOD if args.fastpoll else POLL_PERIOD
-    cpp.include = args.include
-    cpp.exclude = args.exclude
 
-    sync_printers(cups_connection, cpp)
+    sync_printers(sys_printers, cpp)
 
     app = ProxyApp(
-        cups_connection=cups_connection,
+        sys_printers=sys_printers,
         cpp=cpp,
         pidfile_path=os.path.abspath(args.pidfile)
     )
