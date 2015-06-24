@@ -208,7 +208,6 @@ class CloudPrintProxy(object):
     def __init__(self, auth, verbose=True):
         self.auth = auth
         self.verbose = verbose
-        self.sleeptime = 0
         self._pinfo_time = 0
         self._pinfo = []
 
@@ -349,9 +348,10 @@ class PrinterProxy(object):
 
 class ProxyApp(object):
 
-    def __init__(self, sys_printers, cpp, pidfile_path):
+    def __init__(self, sys_printers, cpp, sleeptime, pidfile_path):
         self.sys_printers = sys_printers
         self.cpp = cpp
+        self.sleeptime = sleeptime
         # these are needed by DaemonRunner
         self.pidfile_path = pidfile_path
         self.stdin_path = '/dev/null'
@@ -419,8 +419,8 @@ class ProxyApp(object):
                     if not xmpp_conn.is_connected():
                         xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, self.cpp.auth)
                     if VERBOSE:
-                        LOGGER.info('Waiting %ds for XMPP notification...', self.cpp.sleeptime)
-                    xmpp_conn.await_notification(self.cpp.sleeptime)
+                        LOGGER.info('Waiting %ds for XMPP notification...', self.sleeptime)
+                    xmpp_conn.await_notification(self.sleeptime)
                 except Exception:
                     LOGGER.exception(
                         'ERROR: Could not Connect to XMPP Cloud Service. Will Try again in %d Seconds' % FAIL_RETRY)
@@ -570,13 +570,13 @@ def main():
         sys.exit(0)
 
     cpp = CloudPrintProxy(auth, verbose=bool(VERBOSE or args.verbose))
-    cpp.sleeptime = FAST_POLL_PERIOD if args.fastpoll else POLL_PERIOD
 
     sync_printers(sys_printers, cpp)
 
     app = ProxyApp(
         sys_printers=sys_printers,
         cpp=cpp,
+        sleeptime = FAST_POLL_PERIOD if args.fastpoll else POLL_PERIOD,
         pidfile_path=os.path.abspath(args.pidfile)
     )
 
