@@ -17,7 +17,6 @@
 # along with cloudprint.  If not, see <http://www.gnu.org/licenses/>.
 
 import argparse
-import datetime
 import hashlib
 import json
 import logging
@@ -96,7 +95,7 @@ class CloudPrintAuth(object):
 
     @property
     def access_token(self):
-        if datetime.datetime.now() > self.exp_time:
+        if int(time.time()) > self.exp_time:
             self.refresh()
         return self._access_token
 
@@ -165,9 +164,9 @@ class CloudPrintAuth(object):
         ).json()
         self._access_token = token['access_token']
 
-        slop_time = datetime.timedelta(minutes=15)
-        expires_in = datetime.timedelta(seconds=token['expires_in'])
-        self.exp_time = datetime.datetime.now() + (expires_in - slop_time)
+        slop_time = 15 * 60
+        expires_in = int(token['expires_in'])
+        self.exp_time = int(time.time()) + (expires_in - slop_time)
 
     def load(self):
         try:
