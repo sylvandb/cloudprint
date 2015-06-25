@@ -560,9 +560,8 @@ def main():
         return
 
     if auth.no_auth():
-        name = printers[0]
-        ppd, description = sys_printers.get_printer_info(printer_name)
-        auth.login(name, description, ppd)
+        ppd, description = sys_printers.get_printer_info(printers[0])
+        auth.login(printers[0], description, ppd)
     else:
         auth.load()
 
