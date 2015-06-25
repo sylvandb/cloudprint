@@ -501,16 +501,7 @@ def sync_printers(sys_printers, cpp):
         remote_printers[printer_name].update(description, ppd)
 
 
-
-
-
-def main():
-
-    global LOGGER
-    if LOGGER is None:
-        LOGGER = logging.getLogger(PRINT_CLOUD_SERVICE_ID)
-        LOGGER.setLevel(logging.INFO)
-
+def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', dest='daemon', action='store_true',
                         help='enable daemon mode (requires the daemon module)')
@@ -532,7 +523,19 @@ def main():
                         help='verbose logging')
     parser.add_argument('-D', dest='debug', action='store_true',
                         help='debug logging')
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+
+
+def main():
+
+    global LOGGER
+    if LOGGER is None:
+        LOGGER = logging.getLogger(PRINT_CLOUD_SERVICE_ID)
+        LOGGER.setLevel(logging.INFO)
+
+    args = parse_args()
 
     # if daemon, log to syslog, otherwise log to stdout
     if args.daemon:
@@ -545,6 +548,7 @@ def main():
     if args.debug:
         LOGGER.info('Setting DEBUG-level logging')
         LOGGER.setLevel(logging.DEBUG)
+        args.verbose = True
 
     auth = CloudPrintAuth(args.authfile)
     if args.logout:
