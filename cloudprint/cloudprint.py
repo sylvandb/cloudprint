@@ -365,7 +365,7 @@ class ProxyApp(object):
 
     def process_job(self, printer, job):
 
-        self._job_retries = 0
+        job_retries = 0
         while True:
             try:
 
@@ -387,14 +387,14 @@ class ProxyApp(object):
                     self.sys_printers.print_file(printer.name, tmp.name, job['title'], options)
 
             except Exception:
-                self._job_retries += 1
-                if self._job_retries > RETRIES:
+                job_retries += 1
+                if job_retries > RETRIES:
                     self.cpp.fail_job(job['id'])
                     LOGGER.exception(
-                        'ERROR failed after %d tries: %s', self._job_retries, job['title'].encode('unicode-escape'))
+                        'ERROR failed after %d tries: %s', job_retries, job['title'].encode('unicode-escape'))
                     break
                 LOGGER.exception('Job %s failed attempt %d, Will try again in %d seconds.',
-                    job['title'].encode('unicode-escape'), self._job_retries, FAIL_RETRY)
+                    job['title'].encode('unicode-escape'), job_retries, FAIL_RETRY)
                 time.sleep(FAIL_RETRY)
 
             else:
