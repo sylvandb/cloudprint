@@ -436,18 +436,33 @@ import cups
 class SystemPrinters(object):
 
     def __init__(self, include=None, exclude=None):
-        self.include = include
-        self.exclude = exclude
+        self._include = include
+        self._exclude = exclude
         self.cups = cups.Connection()
         self.printers = None
 
+    # return True if printer name matches *any* of the regular expressions in regexps
+    @staticmethod
+    def _match_re(prn, regexps, empty=False):
+        if regexps:
+            try:
+                return re.match(regexps[0], prn, re.UNICODE) or self._match_re(prn, regexps[1:])
+            except Exception:
+                sys.stderr.write('cloudprint: invalid regular expression: ' + regexps[0] + '\n')
+                sys.exit(1)
+        else:
+            return empty
+
+    def _filter_printers(self, printers):
+        #Include/exclude system printers
+        printers = [prn for prn in printers if self._match_re(prn, self._include, True)]
+        printers = [prn for prn in printers if not self._match_re(prn, self._exclude)]
+        return printers
+
+
     def get_printer_names(self):
         if not self.printers:
-            printers = self.cups.getPrinters().keys()
-            #Include/exclude system printers
-            printers = [prn for prn in printers if match_re(prn, self.include, True)]
-            printers = [prn for prn in printers if not match_re(prn, self.exclude)]
-            self.printers = printers
+            self.printers = self._filter_printers(self.cups.getPrinters().keys())
         return self.printers
 
     def get_printer_info(self, printer_name):
@@ -464,18 +479,6 @@ class SystemPrinters(object):
     def print_file(self, printer_name, file_name, job_title, options):
         self.cups.printFile(printer_name, file_name, job_title[:255], options)
 
-
-
-#True if printer name matches *any* of the regular expressions in regexps
-def match_re(prn, regexps, empty=False):
-    if regexps:
-        try:
-            return re.match(regexps[0], prn, re.UNICODE) or match_re(prn, regexps[1:])
-        except Exception:
-            sys.stderr.write('cloudprint: invalid regular expression: ' + regexps[0] + '\n')
-            sys.exit(1)
-    else:
-        return empty
 
 
 def sync_printers(sys_printers, cpp):
