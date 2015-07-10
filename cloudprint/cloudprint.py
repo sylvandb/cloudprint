@@ -470,10 +470,16 @@ class SystemPrinters(object):
             with open(self.cups.getPPD(printer_name)) as ppd_file:
                 ppd = ppd_file.read()
         except cups.IPPError as e:
+            LOGGER.exception('System printer error:')
             raise SysPrinterError(str(e))
         #This is bad it should use the LanguageEncoding in the PPD
         #But a lot of utf-8 PPDs seem to say they are ISOLatin1
-        return ppd.decode('utf-8'), description
+        try:
+            dppd = ppd.decode('utf-8')
+        except UnicodeDecodeError as e:
+            LOGGER.exception('ppd UTF-8 decoding error:')
+            raise SysPrinterError(str(e))
+        return dppd, description
 
     def print_file(self, printer_name, file_name, job_title, options):
         self.cups.printFile(printer_name, file_name, job_title[:255], options)
@@ -490,8 +496,8 @@ def sync_printers(sys_printers, cpp):
         try:
             ppd, description = sys_printers.get_printer_info(printer_name)
             cpp.add_printer(printer_name, description, ppd)
-        except (SysPrinterError, UnicodeDecodeError):
-            LOGGER.info('Skipping: %s', printer_name)
+        except SysPrinterError as e:
+            LOGGER.info('Skipping: %s, %s', printer_name, e)
 
     #Printers that have left us
     for printer_name in remote_printer_names - local_printer_names:
