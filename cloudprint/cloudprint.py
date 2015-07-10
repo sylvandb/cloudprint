@@ -347,16 +347,10 @@ class PrinterProxy(object):
 
 class ProxyApp(object):
 
-    def __init__(self, sys_printers, cpp, sleeptime, pidfile_path):
+    def __init__(self, sys_printers, cpp, sleeptime):
         self.sys_printers = sys_printers
         self.cpp = cpp
         self.sleeptime = sleeptime
-        # these are needed by DaemonRunner
-        self.pidfile_path = pidfile_path
-        self.stdin_path = '/dev/null'
-        self.stdout_path = '/dev/null'
-        self.stderr_path = '/dev/null'
-        self.pidfile_timeout = 5
 
     def run(self):
         self.process_jobs()
@@ -588,20 +582,23 @@ def main():
         sys_printers=sys_printers,
         cpp=cpp,
         sleeptime = FAST_POLL_PERIOD if args.fastpoll else POLL_PERIOD,
-        pidfile_path=os.path.abspath(args.pidfile)
     )
 
     if args.daemon:
         try:
-            from daemon import runner
+            import daemon
+            import daemon.pidfile
         except ImportError:
             print 'daemon module required for -d'
             print '\tyum install python-daemon, or apt-get install python-daemon, or pip install python-daemon'
             sys.exit(1)
 
-        sys.argv = [sys.argv[0], 'start']
-        daemon_runner = runner.DaemonRunner(app)
-        daemon_runner.do_action()
+        pidfile = daemon.pidfile.TimeoutPIDLockFile(
+            path=os.path.abspath(args.pidfile),
+            timeout=5,
+        )
+        with daemon.DaemonContext(pidfile=pidfile):
+            app.run()
     else:
         app.run()
 
