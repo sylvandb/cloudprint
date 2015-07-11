@@ -40,6 +40,21 @@ VERBOSE = True
 XMPP_SERVER_HOST = 'talk.google.com'
 XMPP_SERVER_PORT = 5223
 
+# in daemon mode, where/how to send syslog messages?
+# if either HOST or PORT is None:
+#   via /dev/log (if SOCKET is None)
+#   via UDP to localhost:514 (if empty SOCKET)
+# otherwise to specified host and port (must specify both)
+SYSLOG_SERVER_HOST = None
+SYSLOG_SERVER_PORT = None
+# using UDP unless TCP is True
+SYSLOG_SERVER_TCP = False
+# but preferably to this unix domain socket
+# (default: /dev/log, mac might want /var/run/syslog)
+SYSLOG_SERVER_SOCKET = None
+# Using log facility (defaults to LOG_USER)
+SYSLOG_FACILITY = None
+
 SOURCE = 'Armooo-PrintProxy-1'
 PRINT_CLOUD_SERVICE_ID = 'cloudprint'
 CLIENT_LOGIN_URL = '/accounts/ClientLogin'
@@ -541,7 +556,26 @@ def main():
 
     # if daemon, log to syslog, otherwise log to stdout
     if args.daemon:
-        handler = logging.handlers.SysLogHandler()
+        try:
+            import daemon
+            import daemon.pidfile
+        except ImportError:
+            print 'daemon module required for -d'
+            print '\tyum install python-daemon, or apt-get install python-daemon, or pip install cloudprint[daemon]'
+            sys.exit(1)
+
+        kwargs = {}
+        logaddr = (SYSLOG_SERVER_HOST, SYSLOG_SERVER_PORT)
+        if None in logaddr:
+            logaddr = '/dev/log' if SYSLOG_SERVER_SOCKET is None else SYSLOG_SERVER_SOCKET
+        if logaddr:
+            kwargs['address'] = logaddr
+        if SYSLOG_SERVER_TCP:
+            from socket import SOCK_STREAM
+            kwargs['socktype'] = SOCK_STREAM
+        if not SYSLOG_FACILITY is None:
+            kwargs['facility'] = SYSLOG_FACILITY
+        handler = logging.handlers.SysLogHandler(**kwargs)
         handler.setFormatter(logging.Formatter(fmt='cloudprint.py: %(message)s'))
     else:
         handler = logging.StreamHandler(sys.stdout)
@@ -585,14 +619,6 @@ def main():
     )
 
     if args.daemon:
-        try:
-            import daemon
-            import daemon.pidfile
-        except ImportError:
-            print 'daemon module required for -d'
-            print '\tyum install python-daemon, or apt-get install python-daemon, or pip install cloudprint[daemon]'
-            sys.exit(1)
-
         pidfile = daemon.pidfile.TimeoutPIDLockFile(
             path=os.path.abspath(args.pidfile),
             timeout=5,
