@@ -418,7 +418,7 @@ class ProxyApp(object):
         while True:
             for printer in self.cpp.get_printers():
                 for job in printer.get_jobs():
-                    process_job(printer, job)
+                    self.process_job(printer, job)
 
             xmpp_poll = XMPP_POLL_PERIOD or 1
             while xmpp_poll > 0:
