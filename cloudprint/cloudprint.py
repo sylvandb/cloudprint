@@ -416,23 +416,46 @@ class ProxyApp(object):
         xmpp_conn = xmpp.XmppConnection(keepalive_period=KEEPALIVE)
 
         while True:
+
             for printer in self.cpp.get_printers():
                 for job in printer.get_jobs():
                     self.process_job(printer, job)
 
+            fail = False
             xmpp_poll = XMPP_POLL_PERIOD or 1
+
             while xmpp_poll > 0:
                 xmpp_poll -= 1
+                msg = 'X'
+
                 try:
-                    if not xmpp_conn.is_connected():
-                        xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, self.cpp.auth)
+
+                    try:
+                        if not xmpp_conn.is_connected():
+                            xmpp_conn.connect(XMPP_SERVER_HOST, XMPP_SERVER_PORT, self.cpp.auth)
+                    except Exception:
+                        msg = 'Failed connect to XMPP Cloud Service'
+                        raise
+
                     if VERBOSE:
                         LOGGER.info('Waiting %ds for XMPP notification...', self.sleeptime)
-                    xmpp_conn.await_notification(self.sleeptime)
+
+                    try:
+                        xmpp_conn.await_notification(self.sleeptime)
+                    except Exception:
+                        msg = 'Failed wait for XMPP Cloud Service notification'
+                        raise
+
+                    fail = False
+                    LOGGER.info('Received XMPP notification')
+
                 except Exception:
-                    LOGGER.exception(
-                        'ERROR: Could not Connect to XMPP Cloud Service. Will Try again in %d Seconds' % FAIL_RETRY)
-                    time.sleep(FAIL_RETRY)
+                    if fail:
+                        LOGGER.exception('ERROR: %s. Will try again in %d Seconds', msg, FAIL_RETRY)
+                        time.sleep(FAIL_RETRY)
+                    else:
+                        LOGGER.exception('ERROR: %s. Trying again', msg)
+                        fail = True
 
 
 
