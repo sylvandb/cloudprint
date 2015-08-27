@@ -440,14 +440,20 @@ class ProxyApp(object):
                     if VERBOSE:
                         LOGGER.info('Waiting %ds for XMPP notification...', self.sleeptime)
 
+                    swait = int(time.time())
+
                     try:
                         xmpp_conn.await_notification(self.sleeptime)
                     except Exception:
                         msg = 'Failed wait for XMPP Cloud Service notification'
                         raise
 
+                    if int(time.time()) - swait >= self.sleeptime:
+                        LOGGER.info('Wait timeout for XMPP notification')
+                    else:
+                        LOGGER.info('Received XMPP notification')
+
                     fail = False
-                    LOGGER.info('Received XMPP notification')
 
                 except Exception:
                     if fail:
