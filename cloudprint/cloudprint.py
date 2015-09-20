@@ -373,6 +373,10 @@ class ProxyApp(object):
 
     def process_job(self, printer, job):
 
+        job_id = job['id']
+        job_title = job['title'].encode('unicode-escape')
+        LOGGER.info('Job START id:%s/%s - spooling to printer:%s', job_id, job_title, printer.name)
+
         job_retries = 0
         while True:
             try:
@@ -390,24 +394,25 @@ class ProxyApp(object):
 
                     for chunk in pdf.iter_content(65536):
                         tmp.write(chunk)
-
+#TODO: send chunks to the printer?
                     tmp.flush()
-                    self.sys_printers.print_file(printer.name, tmp.name, job['title'], options)
+                    self.sys_printers.print_file(printer.name, tmp.name, job_title, options)
 
             except Exception:
                 job_retries += 1
                 if job_retries > RETRIES:
-                    self.cpp.fail_job(job['id'])
+                    self.cpp.fail_job(job_id)
                     LOGGER.exception(
-                        'ERROR failed after %d tries: %s', job_retries, job['title'].encode('unicode-escape'))
+                        'Job FAIL id:%s/%s - failed after %d tries', job_id, job_title, job_retries)
                     break
-                LOGGER.exception('Job %s failed attempt %d, Will try again in %d seconds.',
-                    job['title'].encode('unicode-escape'), job_retries, FAIL_RETRY)
+                LOGGER.exception('Job ERROR id:%s/%s - failed try %d, will retry in %d seconds.',
+                    job_id, job_title, job_retries, FAIL_RETRY)
                 time.sleep(FAIL_RETRY)
 
             else:
-                self.cpp.finish_job(job['id'])
-                LOGGER.info('SUCCESS %s', job['title'].encode('unicode-escape'))
+                self.cpp.finish_job(job_id)
+                LOGGER.info('Job SUCCESS id:%s/%s - spooled in %d tries to printer:%s',
+                    job_id, job_title, job_retries, printer.name)
                 break
 
 
@@ -452,6 +457,7 @@ class ProxyApp(object):
                         LOGGER.info('Wait timeout for XMPP notification')
                     else:
                         LOGGER.info('Received XMPP notification')
+                        break
 
                     fail = False
 
